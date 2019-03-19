@@ -55,6 +55,9 @@ type Config struct {
 	// Adds a limit to how many updates are installed at a time
 	UpdateLimit int `mapstructure:"update_limit"`
 
+	// Adds a limit to how many retries of an update will be tried before skipping.
+	RetryLimit int `mapstructure:"retry_limit"`
+
 	ctx interpolate.Context
 }
 
@@ -97,6 +100,10 @@ func (p *Provisioner) Prepare(raws ...interface{}) error {
 
 	if p.config.UpdateLimit == 0 {
 		p.config.UpdateLimit = 1000
+	}
+
+	if p.config.RetryLimit == 0 {
+		p.config.RetryLimit = 5
 	}
 
 	return errs
@@ -354,11 +361,12 @@ func (p *Provisioner) windowsUpdateCommand() string {
 		"PowerShell -ExecutionPolicy Bypass -OutputFormat Text -EncodedCommand %s",
 		base64.StdEncoding.EncodeToString(
 			encodeUtf16Le(fmt.Sprintf(
-				"%s%s%s -UpdateLimit %d",
+				"%s%s%s -UpdateLimit %d -RetryLimit %d",
 				windowsUpdatePath,
 				searchCriteriaArgument(p.config.SearchCriteria),
 				filtersArgument(p.config.Filters),
-				p.config.UpdateLimit))))
+				p.config.UpdateLimit,
+				p.config.RetryLimit))))
 }
 
 func (p *Provisioner) windowsUpdateCheckForRebootRequiredCommand() string {

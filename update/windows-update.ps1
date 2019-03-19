@@ -28,7 +28,8 @@ param(
     [string]$SearchCriteria = 'BrowseOnly=0 and IsInstalled=0',
     [string[]]$Filters = @('include:$true'),
     [int]$UpdateLimit = 1000,
-    [switch]$OnlyCheckForRebootRequired = $false
+    [switch]$OnlyCheckForRebootRequired = $false,
+    [int]$RetryLimit = 5
 )
 
 $mock = $false
@@ -138,6 +139,40 @@ function ExitWhenRebootRequired($rebootRequired = $false) {
     }
 }
 
+function Update-WUTrackingLog {
+    param(
+        $updates
+    )
+
+    $logPath = "$env:SystemRoot\Temp\packer-windows-update-tracklog.xml"
+    [System.Collections.ArrayList]$logData = @()
+
+    if(Test-Path -Path $logPath) {
+        $logData = Import-Clixml -Path $logPath
+    }
+
+    foreach($u in $updates) {
+        
+        if($logData | Where {$_.Title -eq "$($u.Title)"}) {
+            $dataEntry = $logData[$logData.Title.IndexOf("$($u.Title)")]
+            $dataEntry.RetryCount++
+            $dataEntry.IsDownloaded = $u.IsDownloaded
+            $dataEntry.IsInstalled = $u.IsInstalled
+        } else {
+            $logData += [PSCustomObject]@{
+                            "Title" = $u.Title
+                            "IsDownloaded" = $u.IsDownloaded
+                            "IsInstalled" = $u.IsInstalled
+                            "RetryCount" = 0
+                        }
+        }
+    }
+
+    Export-Clixml -Path $logPath -InputObject $logData
+
+    $logData
+}
+
 ExitWhenRebootRequired
 
 if ($OnlyCheckForRebootRequired) {
@@ -185,11 +220,17 @@ while ($true) {
     Start-Sleep -Seconds 5
 }
 $rebootRequired = $false
+
+Write-Output 'Check/Update Tracking Log'
+$logData = Update-WUTrackingLog -updates $searchResult.Updates
+
 for ($i = 0; $i -lt $searchResult.Updates.Count; ++$i) {
     $update = $searchResult.Updates.Item($i)
     $updateDate = $update.LastDeploymentChangeTime.ToString('yyyy-MM-dd')
     $updateSize = ($update.MaxDownloadSize/1024/1024).ToString('0.##')
     $updateSummary = "Windows update ($updateDate; $updateSize MB): $($update.Title)"
+
+    $retryCount = ($logData | Where {$_.Title -eq "$($update.Title)"}).RetryCount
 
     if ($update.InstallationBehavior.CanRequestUserInput) {
         Write-Output "Skipped (CanRequestUserInput) $updateSummary"
@@ -205,12 +246,15 @@ for ($i = 0; $i -lt $searchResult.Updates.Count; ++$i) {
 
     $update.AcceptEula() | Out-Null
 
-    if (!$update.IsDownloaded) {
+    if ((!$update.IsDownloaded) -or ($retryCount -gt 1)) {
         $updatesToDownloadSize += $update.MaxDownloadSize
         $updatesToDownload.Add($update) | Out-Null
     }
 
-    $updatesToInstall.Add($update) | Out-Null
+    if ($retryCount -le $retryLimit) {
+        $updatesToInstall.Add($update) | Out-Null
+    }
+
     if ($updatesToInstall.Count -ge $UpdateLimit) {
         $rebootRequired = $true
         break
