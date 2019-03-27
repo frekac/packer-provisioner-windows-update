@@ -134,7 +134,10 @@ function ExitWhenRebootRequired($rebootRequired = $false) {
 
     if ($rebootRequired) {
         Write-Output 'Waiting for the Windows Modules Installer to exit...'
-        Wait-Condition {(Get-Process -ErrorAction SilentlyContinue TiWorker | Measure-Object).Count -eq 0}
+        While((Get-Process -ErrorAction SilentlyContinue TiWorker | Measure-Object).Count -ne 0) {
+            Write-Output "Waiting another 15 seconds for Windows Module Installer to finnish..."
+            Start-Sleep -Seconds 15
+        }
         ExitWithCode 101
     }
 }
@@ -153,7 +156,11 @@ function Update-WUTrackingLog {
 
     foreach($u in $updates) {
         
-        if($logData | Where {$_.Title -eq "$($u.Title)"}) {
+        if($u.InstallationBehavior.CanRequestUserInput) {
+            continue
+        }
+
+        if($logData | Where-Object {$_.Title -eq "$($u.Title)"}) {
             $dataEntry = $logData[$logData.Title.IndexOf("$($u.Title)")]
             $dataEntry.RetryCount++
             $dataEntry.IsDownloaded = $u.IsDownloaded
@@ -230,12 +237,12 @@ for ($i = 0; $i -lt $searchResult.Updates.Count; ++$i) {
     $updateSize = ($update.MaxDownloadSize/1024/1024).ToString('0.##')
     $updateSummary = "Windows update ($updateDate; $updateSize MB): $($update.Title)"
 
-    $retryCount = ($logData | Where {$_.Title -eq "$($update.Title)"}).RetryCount
-
     if ($update.InstallationBehavior.CanRequestUserInput) {
         Write-Output "Skipped (CanRequestUserInput) $updateSummary"
         continue
     }
+
+    $retryCount = ($logData | Where-Object {$_.Title -eq "$($update.Title)"}).RetryCount
 
     if (!(Test-IncludeUpdate $updateFilters $update)) {
         Write-Output "Skipped (filter) $updateSummary"
