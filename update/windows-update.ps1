@@ -144,7 +144,8 @@ function ExitWhenRebootRequired($rebootRequired = $false) {
 
 function Update-WUTrackingLog {
     param(
-        $updates
+        $updates,
+        $cumulativeUpdateDetected
     )
 
     $logPath = "$env:SystemRoot\Temp\packer-windows-update-tracklog.xml"
@@ -157,6 +158,10 @@ function Update-WUTrackingLog {
     foreach($u in $updates) {
         
         if($u.InstallationBehavior.CanRequestUserInput) {
+            continue
+        }
+
+        if($cumulativeUpdateDetected -and ($u.Title -notlike "*Cumulative*")) {
             continue
         }
 
@@ -226,40 +231,53 @@ while ($true) {
     Write-Output "Search for Windows updates failed with '$searchStatus'. Retrying..."
     Start-Sleep -Seconds 5
 }
+
 $rebootRequired = $false
 
+# Create a list with just the updates
+$updateList = $searchResult.Updates
+
+# Check if there is a cumulative update in the list, if so it will be the only update to install in the current run.
+$cumulativeUpdateDetected = if($null -ne ($updateList | Where-Object {$_.Title -like "*Cumulative*"})){$true}else{$false}
+
 Write-Output 'Check/Update Tracking Log'
-$logData = Update-WUTrackingLog -updates $searchResult.Updates
+$logData = Update-WUTrackingLog -updates $updateList -cumulativeUpdateDetected $cumulativeUpdateDetected
 
-for ($i = 0; $i -lt $searchResult.Updates.Count; ++$i) {
-    $update = $searchResult.Updates.Item($i)
-    $updateDate = $update.LastDeploymentChangeTime.ToString('yyyy-MM-dd')
-    $updateSize = ($update.MaxDownloadSize/1024/1024).ToString('0.##')
-    $updateSummary = "Windows update ($updateDate; $updateSize MB): $($update.Title)"
+foreach ($u in $updateList) {
+    $updateTitle = $u.Title
 
-    if ($update.InstallationBehavior.CanRequestUserInput) {
+    # If a cumulative update have been detected, skip the other updates for this run.
+    if($cumulativeUpdateDetected -and ($updateTitle -notlike "*Cumulative*")){
+        continue
+    }
+
+    $updateDate = $u.LastDeploymentChangeTime.ToString('yyyy-MM-dd')
+    $updateSize = ($u.MaxDownloadSize/1024/1024).ToString('0.##')
+    $updateSummary = "Windows update ($updateDate; $updateSize MB): $updateTitle"
+
+    if ($u.InstallationBehavior.CanRequestUserInput) {
         Write-Output "Skipped (CanRequestUserInput) $updateSummary"
         continue
     }
 
-    $retryCount = ($logData | Where-Object {$_.Title -eq "$($update.Title)"}).RetryCount
+    $retryCount = ($logData | Where-Object {$_.Title -eq "$updateTitle"}).RetryCount
 
-    if (!(Test-IncludeUpdate $updateFilters $update)) {
+    if (!(Test-IncludeUpdate $updateFilters $u)) {
         Write-Output "Skipped (filter) $updateSummary"
         continue
     }
 
     Write-Output "Found $updateSummary"
 
-    $update.AcceptEula() | Out-Null
+    $u.AcceptEula() | Out-Null
 
-    if ((!$update.IsDownloaded) -or ($retryCount -gt 1)) {
-        $updatesToDownloadSize += $update.MaxDownloadSize
-        $updatesToDownload.Add($update) | Out-Null
+    if ((!$u.IsDownloaded) -or ($retryCount -gt 1)) {
+        $updatesToDownloadSize += $u.MaxDownloadSize
+        $updatesToDownload.Add($u) | Out-Null
     }
 
     if ($retryCount -le $retryLimit) {
-        $updatesToInstall.Add($update) | Out-Null
+        $updatesToInstall.Add($u) | Out-Null
     }
 
     if ($updatesToInstall.Count -ge $UpdateLimit) {

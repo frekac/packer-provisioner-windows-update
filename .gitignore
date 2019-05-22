@@ -5,3 +5,4 @@ packer-provisioner-windows-update-*.zip
 tmp*
 assets_vfsdata.go
 .idea/
+.vscode/settings.json
